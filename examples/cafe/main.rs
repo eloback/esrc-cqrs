@@ -28,7 +28,7 @@ use crate::projector::OrderProjector;
 
 const NATS_URL: &str = "nats://localhost:4222";
 const STORE_PREFIX: &str = "cafe";
-const SERVICE_NAME: &str = "cafe-cqrs";
+const COMMAND_SERVICE_NAME: &str = "cafe-command";
 const PROJECTOR_DURABLE: &str = "cafe-orders";
 /// Query service name, kept separate from the command service to avoid subject collisions.
 const QUERY_SERVICE_NAME: &str = "cafe-query";
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cqrs = CqrsClient::new(driver_client.clone());
         let placed_id = cqrs
             .dispatch_command(
-                SERVICE_NAME,
+                COMMAND_SERVICE_NAME,
                 "Order",
                 order_id,
                 OrderCommand::PlaceOrder {
@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let payload = serde_json::to_vec(&complete_cmd).expect("serialize complete command");
         // Construct the subject manually, can be reused for other commands in the same aggregate.
-        let subject = esrc_cqrs::nats::command_dispatcher::command_subject(SERVICE_NAME, "Order");
+        let subject = esrc_cqrs::nats::command_dispatcher::command_subject(COMMAND_SERVICE_NAME, "Order");
         let reply = driver_client
             .request(subject.clone(), payload.into())
             .await
@@ -130,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Build and run the command dispatcher (blocks until NATS closes or an error occurs).
-    let dispatcher = NatsCommandDispatcher::new(client.clone(), SERVICE_NAME);
+    let dispatcher = NatsCommandDispatcher::new(client.clone(), COMMAND_SERVICE_NAME);
     // Spawn the query dispatcher alongside the command dispatcher.
     let query_dispatcher = NatsQueryDispatcher::new(client.clone(), QUERY_SERVICE_NAME);
     let query_store = store.clone();
