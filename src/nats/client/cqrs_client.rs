@@ -4,9 +4,9 @@ use uuid::Uuid;
 
 use esrc::error::{self, Error};
 
-use super::aggregate_command_handler::{CommandEnvelope, CommandReply};
-use super::command_dispatcher::command_subject;
-use super::query_dispatcher::{QueryEnvelope, QueryReply, query_subject};
+use crate::nats::command::aggregate_command_handler::CommandEnvelope;
+use crate::nats::command_dispatcher::{command_subject, CommandReply};
+use crate::nats::query_dispatcher::{query_subject, QueryEnvelope, QueryReply};
 
 /// High-level CQRS client that removes boilerplate from command and query dispatch.
 ///
@@ -66,8 +66,7 @@ impl CqrsClient {
         C: Serialize,
     {
         let envelope = CommandEnvelope { id, command };
-        let payload =
-            serde_json::to_vec(&envelope).map_err(|e| Error::Format(e.into()))?;
+        let payload = serde_json::to_vec(&envelope).map_err(|e| Error::Format(e.into()))?;
         let subject = command_subject(service_name, handler_name);
 
         let msg = self
@@ -76,8 +75,7 @@ impl CqrsClient {
             .await
             .map_err(|e| Error::Internal(e.into()))?;
 
-        serde_json::from_slice::<CommandReply>(&msg.payload)
-            .map_err(|e| Error::Format(e.into()))
+        serde_json::from_slice::<CommandReply>(&msg.payload).map_err(|e| Error::Format(e.into()))
     }
 
     /// Send a command and return `Ok(reply.id)` on success, or convert the
@@ -98,7 +96,9 @@ impl CqrsClient {
     where
         C: Serialize,
     {
-        let reply = self.send_command(service_name, handler_name, id, command).await?;
+        let reply = self
+            .send_command(service_name, handler_name, id, command)
+            .await?;
         if reply.success {
             Ok(reply.id)
         } else {
@@ -127,11 +127,9 @@ impl CqrsClient {
         handler_name: &str,
         id: Uuid,
     ) -> error::Result<QueryReply>
-    where
-    {
+where {
         let envelope = QueryEnvelope { id };
-        let payload =
-            serde_json::to_vec(&envelope).map_err(|e| Error::Format(e.into()))?;
+        let payload = serde_json::to_vec(&envelope).map_err(|e| Error::Format(e.into()))?;
         let subject = query_subject(service_name, handler_name);
 
         let msg = self
@@ -140,8 +138,7 @@ impl CqrsClient {
             .await
             .map_err(|e| Error::Internal(e.into()))?;
 
-        serde_json::from_slice::<QueryReply>(&msg.payload)
-            .map_err(|e| Error::Format(e.into()))
+        serde_json::from_slice::<QueryReply>(&msg.payload).map_err(|e| Error::Format(e.into()))
     }
 
     /// Send a query and deserialize the result directly into `T`.
@@ -174,9 +171,9 @@ impl CqrsClient {
                 .unwrap_or_else(|| "query failed".to_string());
             return Err(Error::Internal(msg.into()));
         }
-        let data = reply.data.ok_or_else(|| {
-            Error::Internal("query succeeded but returned no data".into())
-        })?;
+        let data = reply
+            .data
+            .ok_or_else(|| Error::Internal("query succeeded but returned no data".into()))?;
         serde_json::from_value::<T>(data).map_err(|e| Error::Format(e.into()))
     }
 }

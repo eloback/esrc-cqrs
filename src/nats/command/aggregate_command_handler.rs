@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::command::CommandHandler;
+pub use crate::nats::command_dispatcher::CommandReply;
 
 /// A standard command envelope sent over NATS.
 ///
@@ -21,17 +22,6 @@ pub struct CommandEnvelope<C> {
     pub id: Uuid,
     /// The actual command to process.
     pub command: C,
-}
-
-/// A standard reply envelope returned after processing a command.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CommandReply {
-    /// The aggregate ID that was modified.
-    pub id: Uuid,
-    /// Whether the command succeeded.
-    pub success: bool,
-    /// The structured CQRS error, present only when `success` is false.
-    pub error: Option<crate::Error>,
 }
 
 /// A generic [`CommandHandler`] implementation for NATS-backed aggregates.

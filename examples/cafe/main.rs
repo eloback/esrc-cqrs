@@ -7,16 +7,16 @@
 //!   nats-server -js
 
 mod domain;
-mod error;
 mod projector;
 
 use std::time::Duration;
 
 use esrc::nats::NatsStore;
+use esrc_cqrs::nats::client::CqrsClient;
+use esrc_cqrs::nats::command::{AggregateCommandHandler, CommandEnvelope, CommandReply};
+use esrc_cqrs::nats::query::{LiveViewQuery, MemoryView, MemoryViewQuery};
 use esrc_cqrs::nats::{
-    AggregateCommandHandler, CommandEnvelope, CommandReply, CqrsClient, DurableProjectorHandler,
-    LiveViewQuery, MemoryView, MemoryViewQuery, NatsCommandDispatcher, NatsQueryDispatcher,
-    QueryEnvelope, QueryReply,
+    DurableProjectorHandler, NatsCommandDispatcher, NatsQueryDispatcher, QueryEnvelope, QueryReply,
 };
 use esrc_cqrs::CqrsRegistry;
 use tokio::time::sleep;

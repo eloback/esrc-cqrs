@@ -44,10 +44,6 @@ impl<V> MemoryView<V> {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("memory view projection error")]
-struct MemoryViewError;
-
 impl<V> Project for MemoryView<V>
 where
     V: View + Clone + Send + Sync + 'static,

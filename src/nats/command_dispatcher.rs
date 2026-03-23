@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use async_nats::service::ServiceExt;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use esrc::error::{self, Error};
-use super::aggregate_command_handler::CommandReply;
+use uuid::Uuid;
 
 use crate::registry::ErasedCommandHandler;
 
@@ -14,6 +15,17 @@ use crate::registry::ErasedCommandHandler;
 /// Full subject pattern: `<service_name>.<handler_name>`
 /// where `handler_name` is the value returned by `CommandHandler::name()`.
 pub const CMD_SERVICE_VERSION: &str = "0.1.0";
+
+/// A standard reply envelope returned after processing a command.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CommandReply {
+    /// The aggregate ID that was modified.
+    pub id: Uuid,
+    /// Whether the command succeeded.
+    pub success: bool,
+    /// The structured CQRS error, present only when `success` is false.
+    pub error: Option<crate::Error>,
+}
 
 /// NATS command dispatcher.
 ///

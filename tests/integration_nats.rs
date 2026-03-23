@@ -7,6 +7,8 @@
 //!   cargo test -p esrc-cqrs --test integration_nats -- --test-threads=1
 
 use esrc::view::View;
+use esrc_cqrs::nats::command::{AggregateCommandHandler, CommandEnvelope, CommandReply};
+use esrc_cqrs::nats::query::LiveViewQuery;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,13 +18,11 @@ use esrc::event::replay::ReplayOneExt;
 use esrc::nats::NatsStore;
 use esrc::project::{Context, Project};
 use esrc::version::{DeserializeVersion, SerializeVersion};
-use serde::{Deserialize, Serialize};
 use esrc::{Envelope, Event};
-use esrc_cqrs::nats::{
-    AggregateCommandHandler, CommandEnvelope, CommandReply, DurableProjectorHandler, LiveViewQuery, NatsCommandDispatcher
-};
+use esrc_cqrs::nats::{DurableProjectorHandler, NatsCommandDispatcher};
 use esrc_cqrs::nats::{NatsQueryDispatcher, QueryEnvelope, QueryReply};
 use esrc_cqrs::CqrsRegistry;
+use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -44,8 +44,12 @@ struct Counter {
 
 #[derive(Debug, Deserialize, Serialize)]
 enum CounterCommand {
-    Increment { by: i64 },
-    Decrement { by: i64 },
+    Increment {
+        by: i64,
+    },
+    Decrement {
+        by: i64,
+    },
     /// A command that always fails, used to test command error propagation.
     AlwaysFail,
 }
@@ -130,6 +134,7 @@ struct RecordingProjector {
     fail_next: Arc<Mutex<bool>>,
 }
 
+#[allow(dead_code)]
 impl RecordingProjector {
     fn new() -> Self {
         Self::default()
@@ -333,7 +338,8 @@ async fn test_command_error_does_not_break_dispatcher() {
 
     spawn_dispatcher(&ctx, registry.command_handlers().to_vec()).await;
 
-    let subject = esrc_cqrs::nats::command_dispatcher::command_subject(ctx.service_name(), "Counter");
+    let subject =
+        esrc_cqrs::nats::command_dispatcher::command_subject(ctx.service_name(), "Counter");
 
     // Send a command that will always fail.
     let bad_envelope = CommandEnvelope {
@@ -350,7 +356,10 @@ async fn test_command_error_does_not_break_dispatcher() {
         .expect("NATS request should succeed");
     let reply: CommandReply = serde_json::from_slice(&raw.payload).expect("valid CommandReply");
 
-    assert!(!reply.success, "AlwaysFail command should return success=false");
+    assert!(
+        !reply.success,
+        "AlwaysFail command should return success=false"
+    );
     assert!(reply.error.is_some(), "error field should be populated");
 
     // Recover the typed aggregate error from the External variant.
@@ -464,7 +473,10 @@ async fn test_projector_acks_messages_no_redelivery() {
     sleep(Duration::from_millis(500)).await;
 
     let count_after_first_window = received.lock().unwrap().len();
-    assert_eq!(count_after_first_window, 1, "projector should have seen exactly 1 event");
+    assert_eq!(
+        count_after_first_window, 1,
+        "projector should have seen exactly 1 event"
+    );
 
     // Wait well past the default NATS ack-wait period (30s) would cause a
     // redelivery if the message was not acked. We use a shorter synthetic wait
@@ -513,7 +525,10 @@ async fn test_projector_error_propagates() {
         CounterCommand::Increment { by: 7 },
     )
     .await;
-    assert!(resp.success, "command must succeed regardless of projector state");
+    assert!(
+        resp.success,
+        "command must succeed regardless of projector state"
+    );
 
     // The projector task should finish (with an error) within a reasonable time.
     sleep(Duration::from_millis(800)).await;
@@ -705,7 +720,14 @@ async fn test_query_returns_aggregate_state() {
 
     // Apply two increments so the aggregate has a known value.
     for by in [10i64, 5] {
-        let resp = send_command(&ctx.client, ctx.service_name(), "Counter", id, CounterCommand::Increment { by }).await;
+        let resp = send_command(
+            &ctx.client,
+            ctx.service_name(),
+            "Counter",
+            id,
+            CounterCommand::Increment { by },
+        )
+        .await;
         assert!(resp.success, "command should succeed");
     }
 
@@ -716,7 +738,10 @@ async fn test_query_returns_aggregate_state() {
 
     let state: CounterState = serde_json::from_value(reply.data.expect("data present"))
         .expect("CounterState should deserialize");
-    assert_eq!(state.value, 15, "query should reflect cumulative aggregate state");
+    assert_eq!(
+        state.value, 15,
+        "query should reflect cumulative aggregate state"
+    );
 
     ctx.cleanup().await;
 }
@@ -727,12 +752,12 @@ async fn test_query_returns_aggregate_state() {
 async fn test_query_default_state_for_new_aggregate() {
     let ctx = TestCtx::new("qry-new").await;
 
-    let registry = CqrsRegistry::new(ctx.store.clone()).register_query(
-        LiveViewQuery::<Counter, CounterState>::new(
-            "Counter.GetState",
-            |v| CounterState { value: v.value },
-        ),
-    );
+    let registry =
+        CqrsRegistry::new(ctx.store.clone()).register_query(
+            LiveViewQuery::<Counter, CounterState>::new("Counter.GetState", |v| CounterState {
+                value: v.value,
+            }),
+        );
 
     spawn_query_dispatcher(&ctx, registry.query_handlers().to_vec()).await;
 
@@ -742,7 +767,10 @@ async fn test_query_default_state_for_new_aggregate() {
     assert!(reply.success, "query on a new aggregate should succeed");
     let state: CounterState = serde_json::from_value(reply.data.expect("data present"))
         .expect("CounterState should deserialize");
-    assert_eq!(state.value, 0, "new aggregate should have default value of 0");
+    assert_eq!(
+        state.value, 0,
+        "new aggregate should have default value of 0"
+    );
 
     ctx.cleanup().await;
 }
@@ -753,16 +781,17 @@ async fn test_query_default_state_for_new_aggregate() {
 async fn test_query_malformed_payload_returns_error() {
     let ctx = TestCtx::new("qry-bad").await;
 
-    let registry = CqrsRegistry::new(ctx.store.clone()).register_query(
-        LiveViewQuery::<Counter, CounterState>::new(
-            "Counter.GetState",
-            |v| CounterState { value: v.value },
-        ),
-    );
+    let registry =
+        CqrsRegistry::new(ctx.store.clone()).register_query(
+            LiveViewQuery::<Counter, CounterState>::new("Counter.GetState", |v| CounterState {
+                value: v.value,
+            }),
+        );
 
     spawn_query_dispatcher(&ctx, registry.query_handlers().to_vec()).await;
 
-    let subject = esrc_cqrs::nats::query_dispatcher::query_subject(ctx.service_name(), "Counter.GetState");
+    let subject =
+        esrc_cqrs::nats::query_dispatcher::query_subject(ctx.service_name(), "Counter.GetState");
 
     // Send garbage bytes; we only care that we get a response, not a panic.
     let bad_result = ctx
@@ -774,7 +803,10 @@ async fn test_query_malformed_payload_returns_error() {
     // Confirm the dispatcher is still alive by sending a well-formed query.
     let id = Uuid::new_v4();
     let reply = send_query(&ctx.client, ctx.service_name(), "Counter.GetState", id).await;
-    assert!(reply.success, "dispatcher should still handle valid queries after a bad payload");
+    assert!(
+        reply.success,
+        "dispatcher should still handle valid queries after a bad payload"
+    );
 
     ctx.cleanup().await;
 }
