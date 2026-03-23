@@ -2,7 +2,7 @@ use async_nats::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use esrc::error::{self, Error};
+use crate::error::{self, Error};
 
 use crate::nats::command::aggregate_command_handler::CommandEnvelope;
 use crate::nats::command_dispatcher::{command_subject, CommandReply};
@@ -66,16 +66,17 @@ impl CqrsClient {
         C: Serialize,
     {
         let envelope = CommandEnvelope { id, command };
-        let payload = serde_json::to_vec(&envelope).map_err(|e| Error::Format(e.into()))?;
+        let payload = serde_json::to_vec(&envelope).map_err(|e| Error::Format(e.to_string()))?;
         let subject = command_subject(service_name, handler_name);
 
         let msg = self
             .inner
             .request(subject, payload.into())
             .await
-            .map_err(|e| Error::Internal(e.into()))?;
+            .map_err(|e| Error::Internal(e.to_string()))?;
 
-        serde_json::from_slice::<CommandReply>(&msg.payload).map_err(|e| Error::Format(e.into()))
+        serde_json::from_slice::<CommandReply>(&msg.payload)
+            .map_err(|e| Error::Format(e.to_string()))
     }
 
     /// Send a command and return `Ok(reply.id)` on success, or convert the
@@ -102,12 +103,10 @@ impl CqrsClient {
         if reply.success {
             Ok(reply.id)
         } else {
-            let msg = reply
-                .error
-                .as_ref()
-                .map(|e| format!("{e:?}"))
-                .unwrap_or_else(|| "command failed".to_string());
-            Err(Error::Internal(msg.into()))
+            let err = reply.error.unwrap_or(Error::Internal(
+                "command failed but no error present".into(),
+            ));
+            return Err(err);
         }
     }
 
@@ -129,16 +128,16 @@ impl CqrsClient {
     ) -> error::Result<QueryReply>
 where {
         let envelope = QueryEnvelope { id };
-        let payload = serde_json::to_vec(&envelope).map_err(|e| Error::Format(e.into()))?;
+        let payload = serde_json::to_vec(&envelope).map_err(|e| Error::Format(e.to_string()))?;
         let subject = query_subject(service_name, handler_name);
 
         let msg = self
             .inner
             .request(subject, payload.into())
             .await
-            .map_err(|e| Error::Internal(e.into()))?;
+            .map_err(|e| Error::Internal(e.to_string()))?;
 
-        serde_json::from_slice::<QueryReply>(&msg.payload).map_err(|e| Error::Format(e.into()))
+        serde_json::from_slice::<QueryReply>(&msg.payload).map_err(|e| Error::Format(e.to_string()))
     }
 
     /// Send a query and deserialize the result directly into `T`.
@@ -164,17 +163,15 @@ where {
     {
         let reply = self.send_query(service_name, handler_name, id).await?;
         if !reply.success {
-            let msg = reply
+            let err = reply
                 .error
-                .as_ref()
-                .map(|e| format!("{e:?}"))
-                .unwrap_or_else(|| "query failed".to_string());
-            return Err(Error::Internal(msg.into()));
+                .unwrap_or(Error::Internal("query failed but no error present".into()));
+            return Err(err);
         }
         let data = reply
             .data
             .ok_or_else(|| Error::Internal("query succeeded but returned no data".into()))?;
-        serde_json::from_value::<T>(data).map_err(|e| Error::Format(e.into()))
+        serde_json::from_value::<T>(data).map_err(|e| Error::Format(e.to_string()))
     }
 }
 

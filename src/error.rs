@@ -94,3 +94,5 @@ pub fn from_esrc_error(err: esrc::error::Error) -> Error {
     }
 }
 
+/// An alias type that always implies an framework error.
+pub type Result<T> = std::result::Result<T, Error>;
