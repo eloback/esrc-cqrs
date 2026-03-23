@@ -60,6 +60,3 @@ pub mod query;
 pub mod durable_projector_handler;
 
 pub use durable_projector_handler::DurableProjectorHandler;
-
-pub use command::ServiceCommandHandler;
-pub use command::service_command_handler::ServiceCommandReply;

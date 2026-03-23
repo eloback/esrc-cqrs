@@ -44,10 +44,10 @@ pub mod command;
 pub mod error;
 /// Event projector handler registry entry.
 pub mod projector;
-/// The top-level CQRS registry that holds and drives all handlers.
-pub mod registry;
 /// Query handler trait and registry entry.
 pub mod query;
+/// The top-level CQRS registry that holds and drives all handlers.
+pub mod registry;
 
 /// NATS-backed implementations of the command dispatcher and projector runner.
 #[cfg(feature = "nats")]
@@ -58,10 +58,6 @@ pub use command::NatsServiceCommandHandler;
 pub use error::Error;
 #[cfg(feature = "nats")]
 pub use nats::client::CqrsClient;
-#[cfg(feature = "nats")]
-pub use nats::command::ServiceCommandHandler;
-#[cfg(feature = "nats")]
-pub use nats::command::service_command_handler::ServiceCommandReply;
 pub use projector::ProjectorHandler;
-pub use registry::CqrsRegistry;
 pub use query::QueryHandler;
+pub use registry::CqrsRegistry;
