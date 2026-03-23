@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use esrc::nats::NatsStore;
 use esrc_cqrs::nats::{
-    AggregateCommandHandler, CommandEnvelope, CommandReply, DurableProjectorHandler, LiveViewQuery,
-    NatsCommandDispatcher, NatsQueryDispatcher, QueryEnvelope, QueryReply,
+    AggregateCommandHandler, CommandEnvelope, CommandReply, CqrsClient, DurableProjectorHandler,
+    LiveViewQuery, NatsCommandDispatcher, NatsQueryDispatcher, QueryEnvelope, QueryReply,
 };
 use esrc_cqrs::CqrsRegistry;
 use tokio::time::sleep;
@@ -61,47 +61,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let order_id = Uuid::new_v4();
 
-        // Place an order.
-        let place_cmd = CommandEnvelope {
-            id: order_id,
-            command: OrderCommand::PlaceOrder {
-                item: "Espresso".to_string(),
-                quantity: 2,
-            },
-        };
-        let payload = serde_json::to_vec(&place_cmd).expect("serialize place command");
-        let subject = esrc_cqrs::nats::command_dispatcher::command_subject(SERVICE_NAME, "Order");
-        let reply = driver_client
-            .request(subject.clone(), payload.into())
+        // Place an order using CqrsClient::dispatch_command, which converts
+        // a failed reply into Err automatically.
+        let cqrs = CqrsClient::new(driver_client.clone());
+        let placed_id = cqrs
+            .dispatch_command(
+                SERVICE_NAME,
+                "Order",
+                order_id,
+                OrderCommand::PlaceOrder {
+                    item: "Espresso".to_string(),
+                    quantity: 2,
+                },
+            )
             .await
-            .unwrap();
-        let reply: CommandReply = serde_json::from_slice(&reply.payload).unwrap();
-        println!("[client] PlaceOrder reply: {:?}", reply);
-        assert!(reply.success);
+            .expect("PlaceOrder command failed");
+        println!("[client] PlaceOrder dispatch_command id: {:?}", placed_id);
+        assert_eq!(placed_id, order_id);
 
         sleep(Duration::from_millis(200)).await;
 
-        // Query the order state after placing it.
-        let query_subject =
-            esrc_cqrs::nats::query_dispatcher::query_subject(QUERY_SERVICE_NAME, "Order.GetState");
-        let query_payload =
-            serde_json::to_vec(&QueryEnvelope { id: order_id }).expect("serialize query");
-        let reply = driver_client
-            .request(query_subject.clone(), query_payload.into())
+        // Query the order state using CqrsClient::dispatch_query for a typed result.
+        let order_state: OrderState = cqrs
+            .dispatch_query(QUERY_SERVICE_NAME, "Order.GetState", order_id)
             .await
-            .unwrap();
-        let reply: QueryReply = serde_json::from_slice(&reply.payload).unwrap();
-        println!("[client] Order.GetState reply: {:?}", reply);
-        assert!(reply.success);
+            .expect("Order.GetState query failed");
+        println!("[client] Order.GetState dispatch_query: {:?}", order_state);
+        assert_eq!(order_state.item.as_deref(), Some("Espresso"));
 
         sleep(Duration::from_millis(200)).await;
 
-        // Complete the order.
+        // Using manual request/reply to demonstrate access to raw CommandReply and QueryReply
+        // fields.
+
+        // Complete the order using CqrsClient::send_command to inspect the raw reply.
         let complete_cmd = CommandEnvelope {
             id: order_id,
             command: OrderCommand::CompleteOrder,
         };
         let payload = serde_json::to_vec(&complete_cmd).expect("serialize complete command");
+        // Construct the subject manually, can be reused for other commands in the same aggregate.
+        let subject = esrc_cqrs::nats::command_dispatcher::command_subject(SERVICE_NAME, "Order");
         let reply = driver_client
             .request(subject.clone(), payload.into())
             .await
@@ -112,7 +112,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         sleep(Duration::from_millis(200)).await;
 
-        // Query again after completing the order.
+        // Query again using send_query to access the raw QueryReply fields.
+        let query_subject =
+            esrc_cqrs::nats::query_dispatcher::query_subject(QUERY_SERVICE_NAME, "Order.GetState");
         let query_payload =
             serde_json::to_vec(&QueryEnvelope { id: order_id }).expect("serialize query");
         let reply = driver_client
