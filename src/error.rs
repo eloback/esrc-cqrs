@@ -94,5 +94,11 @@ pub fn from_esrc_error(err: esrc::error::Error) -> Error {
     }
 }
 
+impl From<esrc::error::Error> for Error {
+    fn from(err: esrc::error::Error) -> Self {
+        from_esrc_error(err)
+    }
+}
+
 /// An alias type that always implies an framework error.
 pub type Result<T> = std::result::Result<T, Error>;

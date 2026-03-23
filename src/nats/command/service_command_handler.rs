@@ -1,10 +1,8 @@
-use std::marker::PhantomData;
-
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
 
 use esrc::error::{self, Error};
 
-use crate::command::{CommandHandler, NatsServiceCommandHandler};
+use crate::command::NatsServiceCommandHandler;
 
 use serde::{Deserialize, Serialize};
 
@@ -96,13 +94,8 @@ where
         self.name
     }
 
-    async fn handle<'a>(
-        &'a self,
-        store: &'a mut S,
-        payload: &'a [u8],
-    ) -> error::Result<Vec<u8>> {
-        let command: C =
-            serde_json::from_slice(payload).map_err(|e| Error::Format(e.into()))?;
+    async fn handle<'a>(&'a self, store: &'a mut S, payload: &'a [u8]) -> error::Result<Vec<u8>> {
+        let command: C = serde_json::from_slice(payload).map_err(|e| Error::Format(e.into()))?;
         self.handler.handle(store, command).await
     }
 }
