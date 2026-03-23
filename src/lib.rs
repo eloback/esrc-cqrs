@@ -60,6 +60,8 @@ pub use error::Error;
 pub use nats::client::CqrsClient;
 #[cfg(feature = "nats")]
 pub use nats::command::ServiceCommandHandler;
+#[cfg(feature = "nats")]
+pub use nats::command::service_command_handler::ServiceCommandReply;
 pub use projector::ProjectorHandler;
 pub use registry::CqrsRegistry;
 pub use query::QueryHandler;

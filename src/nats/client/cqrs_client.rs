@@ -173,6 +173,81 @@ where {
             .ok_or_else(|| Error::Internal("query succeeded but returned no data".into()))?;
         serde_json::from_value::<T>(data).map_err(|e| Error::Format(e.to_string()))
     }
+
+    /// Send a typed service command and deserialize the raw reply as `R`.
+    ///
+    /// The command is serialized and sent to subject `<service_name>.<command_name>`.
+    /// The reply bytes are deserialized directly as `R`, so `R` must match whatever
+    /// the handler returns (e.g., [`crate::ServiceCommandReply<D>`] for a structured
+    /// reply, or any other serializable type).
+    ///
+    /// This method is intentionally low-level: use [`dispatch_service_command`] when
+    /// the handler uses [`crate::ServiceCommandReply`] and you want `Result<D>`.
+    ///
+    /// [`dispatch_service_command`]: CqrsClient::dispatch_service_command
+    pub async fn send_service_command<C, R>(
+        &self,
+        service_name: &str,
+        command_name: &str,
+        command: C,
+    ) -> error::Result<R>
+    where
+        C: Serialize,
+        R: for<'de> Deserialize<'de>,
+    {
+        let payload = serde_json::to_vec(&command).map_err(|e| Error::Format(e.to_string()))?;
+        let subject = command_subject(service_name, command_name);
+
+        let msg = self
+            .inner
+            .request(subject, payload.into())
+            .await
+            .map_err(|e| Error::Internal(e.to_string()))?;
+
+        serde_json::from_slice::<R>(&msg.payload).map_err(|e| Error::Format(e.to_string()))
+    }
+
+    /// Send a typed service command and return the inner data on success.
+    ///
+    /// Sends `command` to subject `<service_name>.<command_name>` and expects the
+    /// handler to reply with a [`crate::ServiceCommandReply<R>`]. On success,
+    /// returns `Ok(reply.data)`. On failure, returns `Err` with the reply error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the NATS request fails, the reply cannot be deserialized,
+    /// or `reply.success` is false.
+    pub async fn dispatch_service_command<C, R>(
+        &self,
+        service_name: &str,
+        command_name: &str,
+        command: C,
+    ) -> error::Result<R>
+    where
+        C: Serialize,
+        R: for<'de> Deserialize<'de>,
+    {
+        use crate::nats::command::service_command_handler::ServiceCommandReply;
+
+        let reply = self
+            .send_service_command::<C, ServiceCommandReply<R>>(
+                service_name,
+                command_name,
+                command,
+            )
+            .await?;
+
+        if reply.success {
+            reply
+                .data
+                .ok_or_else(|| Error::Internal("command succeeded but returned no data".into()))
+        } else {
+            let err = reply
+                .error
+                .unwrap_or(Error::Internal("command failed but no error present".into()));
+            Err(err)
+        }
+    }
 }
 
 impl From<Client> for CqrsClient {
