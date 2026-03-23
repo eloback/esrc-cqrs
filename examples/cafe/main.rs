@@ -8,6 +8,7 @@
 
 mod domain;
 mod projector;
+mod service;
 
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use esrc::nats::NatsStore;
 use esrc_cqrs::nats::client::CqrsClient;
 use esrc_cqrs::nats::command::{AggregateCommandHandler, CommandEnvelope, CommandReply};
 use esrc_cqrs::nats::query::{LiveViewQuery, MemoryView, MemoryViewQuery};
+use esrc_cqrs::nats::command::ServiceCommandHandler;
 use esrc_cqrs::nats::{
     DurableProjectorHandler, NatsCommandDispatcher, NatsQueryDispatcher, QueryEnvelope, QueryReply,
 };
@@ -24,6 +26,7 @@ use uuid::Uuid;
 
 use crate::domain::{Order, OrderCommand, OrderState};
 use crate::projector::OrderProjector;
+use crate::service::{CafeCommands, CafeServiceHandler};
 
 const NATS_URL: &str = "nats://localhost:4222";
 const STORE_PREFIX: &str = "cafe";
@@ -31,6 +34,9 @@ const COMMAND_SERVICE_NAME: &str = "cafe-command";
 const PROJECTOR_DURABLE: &str = "cafe-orders";
 /// Query service name, kept separate from the command service to avoid subject collisions.
 const QUERY_SERVICE_NAME: &str = "cafe-query";
+
+/// Service command handler name, used as its NATS endpoint name.
+const SERVICE_HANDLER_NAME: &str = "CafeService";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = CqrsRegistry::new(store.clone())
         .register_command(AggregateCommandHandler::<Order>::new("Order"))
+        .register_command(ServiceCommandHandler::new(CafeServiceHandler))
         .register_query(
             LiveViewQuery::<OrderState, OrderState>::new_for_serializable_view("Order.GetState"),
         )
@@ -70,6 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sleep(Duration::from_millis(500)).await;
 
         let order_id = Uuid::new_v4();
+
+        // --- AggregateCommandHandler path (existing) ---
 
         // Place an order using CqrsClient::dispatch_command, which converts
         // a failed reply into Err automatically.
@@ -148,6 +157,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert!(reply.success);
 
         // Let the projector process the events before shutdown.
+        sleep(Duration::from_millis(200)).await;
+
+        // --- ServiceCommandHandler path (new) ---
+
+        let service_order_id = Uuid::new_v4();
+
+        // Place an order via the service command handler.
+        let placed_id: Uuid = cqrs
+            .dispatch_service_command(
+                COMMAND_SERVICE_NAME,
+                SERVICE_HANDLER_NAME,
+                CafeCommands::PlaceOrder {
+                    id: service_order_id,
+                    item: "Latte".to_string(),
+                    quantity: 1,
+                },
+            )
+            .await
+            .expect("CafeService PlaceOrder should succeed");
+        println!("[client] CafeService PlaceOrder id: {:?}", placed_id);
+        assert_eq!(placed_id, service_order_id);
+
+        sleep(Duration::from_millis(200)).await;
+
+        // Complete the order via the service command handler.
+        let completed_id: Uuid = cqrs
+            .dispatch_service_command(
+                COMMAND_SERVICE_NAME,
+                SERVICE_HANDLER_NAME,
+                CafeCommands::CompleteOrder { id: service_order_id },
+            )
+            .await
+            .expect("CafeService CompleteOrder should succeed");
+        println!("[client] CafeService CompleteOrder id: {:?}", completed_id);
+        assert_eq!(completed_id, service_order_id);
+
         sleep(Duration::from_secs(1)).await;
     });
 

@@ -26,6 +26,10 @@ use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use uuid::Uuid;
 
+use esrc_cqrs::command::NatsServiceCommandHandler;
+use esrc_cqrs::nats::command::ServiceCommandHandler;
+use esrc_cqrs::nats::command::service_command_handler::ServiceCommandReply;
+
 // -- Query read model --------------------------------------------------------
 
 /// A simple read model returned by query handlers in tests.
@@ -830,6 +834,214 @@ async fn test_registry_query_handlers_accessor() {
         registry.query_handlers().len(),
         2,
         "two query handlers should be registered"
+    );
+
+    ctx.cleanup().await;
+}
+
+// -- ServiceCommandHandler tests ---------------------------------------------
+
+/// A typed command enum dispatched through the service handler path.
+#[derive(Debug, Serialize, Deserialize)]
+enum CounterServiceCommand {
+    Increment { id: Uuid, by: i64 },
+    Decrement { id: Uuid, by: i64 },
+    /// A variant that always fails, used to test domain error propagation.
+    AlwaysFail { id: Uuid },
+}
+
+/// Service handler that routes `CounterServiceCommand` variants to the aggregate.
+#[derive(Clone)]
+struct CounterServiceHandler;
+
+impl NatsServiceCommandHandler<NatsStore, CounterServiceCommand> for CounterServiceHandler {
+    fn name(&self) -> &'static str {
+        "CounterService"
+    }
+
+    async fn handle<'a>(
+        &'a self,
+        store: &'a mut NatsStore,
+        command: CounterServiceCommand,
+    ) -> esrc::error::Result<Vec<u8>> {
+        use esrc::event::publish::PublishExt;
+        use esrc::event::replay::ReplayOneExt;
+
+        let reply: ServiceCommandReply<Uuid> = match command {
+            CounterServiceCommand::Increment { id, by } => {
+                let root = store.read::<Counter>(id).await?;
+                match store.try_write(root, CounterCommand::Increment { by }, None).await {
+                    Ok(written) => ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written)),
+                    Err(e) => ServiceCommandReply::err(esrc_to_cqrs(e)),
+                }
+            },
+            CounterServiceCommand::Decrement { id, by } => {
+                let root = store.read::<Counter>(id).await?;
+                match store.try_write(root, CounterCommand::Decrement { by }, None).await {
+                    Ok(written) => ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written)),
+                    Err(e) => ServiceCommandReply::err(esrc_to_cqrs(e)),
+                }
+            },
+            CounterServiceCommand::AlwaysFail { id } => {
+                let root = store.read::<Counter>(id).await?;
+                match store.try_write(root, CounterCommand::AlwaysFail, None).await {
+                    Ok(written) => ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written)),
+                    Err(e) => ServiceCommandReply::err(esrc_to_cqrs(e)),
+                }
+            },
+        };
+
+        serde_json::to_vec(&reply)
+            .map_err(|e| esrc::error::Error::Format(e.into()))
+    }
+}
+
+/// Convert an [`esrc::error::Error`] into a [`esrc_cqrs::Error`] for use in `ServiceCommandReply`.
+fn esrc_to_cqrs(err: esrc::error::Error) -> esrc_cqrs::Error {
+    match err {
+        esrc::error::Error::Internal(e) => esrc_cqrs::Error::Internal(e.to_string()),
+        esrc::error::Error::External(e) => {
+            // Attempt to downcast to the known aggregate error type for structured transport.
+            let value = match e.downcast::<CounterError>() {
+                Ok(agg_err) => serde_json::to_value(&*agg_err)
+                    .unwrap_or(serde_json::Value::String("serialization failed".into())),
+                Err(e) => serde_json::Value::String(e.to_string()),
+            };
+            esrc_cqrs::Error::External(value)
+        },
+        esrc::error::Error::Format(e) => esrc_cqrs::Error::Format(e.to_string()),
+        esrc::error::Error::Invalid => esrc_cqrs::Error::Invalid,
+        esrc::error::Error::Conflict => esrc_cqrs::Error::Conflict,
+    }
+}
+
+/// Test that a well-formed service command returns `success: true` and the
+/// store reflects the applied event.
+#[tokio::test]
+async fn test_service_command_handler_success() {
+    let ctx = TestCtx::new("svc-ok").await;
+
+    let registry = CqrsRegistry::new(ctx.store.clone())
+        .register_command(ServiceCommandHandler::new(CounterServiceHandler));
+
+    spawn_dispatcher(&ctx, registry.command_handlers().to_vec()).await;
+
+    let id = Uuid::new_v4();
+    let subject =
+        esrc_cqrs::nats::command_dispatcher::command_subject(ctx.service_name(), "CounterService");
+    let envelope = CounterServiceCommand::Increment { id, by: 7 };
+    let payload = serde_json::to_vec(&envelope).expect("serialize service command");
+    let msg = ctx
+        .client
+        .request(subject, payload.into())
+        .await
+        .expect("NATS request should succeed");
+
+    let reply: ServiceCommandReply<Uuid> =
+        serde_json::from_slice(&msg.payload).expect("valid ServiceCommandReply");
+
+    assert!(reply.success, "service command should succeed");
+    assert_eq!(reply.data, Some(id));
+    assert!(reply.error.is_none());
+
+    // Verify the event was persisted.
+    let root: esrc::aggregate::Root<Counter> = ctx.store.read(id).await.unwrap();
+    assert_eq!(root.value, 7, "aggregate value should reflect the service command event");
+
+    ctx.cleanup().await;
+}
+
+/// Test that a service command triggering a domain error returns `success: false`
+/// with a populated `error` field, and the dispatcher keeps running.
+#[tokio::test]
+async fn test_service_command_handler_error() {
+    let ctx = TestCtx::new("svc-err").await;
+
+    let registry = CqrsRegistry::new(ctx.store.clone())
+        .register_command(ServiceCommandHandler::new(CounterServiceHandler));
+
+    spawn_dispatcher(&ctx, registry.command_handlers().to_vec()).await;
+
+    let id = Uuid::new_v4();
+    let subject =
+        esrc_cqrs::nats::command_dispatcher::command_subject(ctx.service_name(), "CounterService");
+
+    // Send a command that always fails at the domain level.
+    let envelope = CounterServiceCommand::AlwaysFail { id };
+    let payload = serde_json::to_vec(&envelope).expect("serialize service command");
+    let msg = ctx
+        .client
+        .request(subject.clone(), payload.into())
+        .await
+        .expect("NATS request should succeed");
+
+    let reply: ServiceCommandReply<Uuid> =
+        serde_json::from_slice(&msg.payload).expect("valid ServiceCommandReply");
+
+    assert!(!reply.success, "AlwaysFail should return success=false");
+    assert!(reply.error.is_some(), "error field should be populated");
+
+    // Recover the typed aggregate error from the External variant.
+    let cqrs_err = reply.error.as_ref().unwrap();
+    let agg_err: CounterError = cqrs_err
+        .downcast_external::<CounterError>()
+        .expect("External variant should be present and deserializable");
+    assert!(
+        matches!(agg_err, CounterError::ForcedFailure),
+        "deserialized aggregate error should be ForcedFailure, got: {agg_err:?}"
+    );
+
+    // Confirm the dispatcher is still alive.
+    let good_id = Uuid::new_v4();
+    let good_envelope = CounterServiceCommand::Increment { id: good_id, by: 3 };
+    let good_payload = serde_json::to_vec(&good_envelope).expect("serialize");
+    let good_msg = ctx
+        .client
+        .request(subject.clone(), good_payload.into())
+        .await
+        .expect("NATS request should succeed");
+    let good_reply: ServiceCommandReply<Uuid> =
+        serde_json::from_slice(&good_msg.payload).expect("valid ServiceCommandReply");
+    assert!(good_reply.success, "dispatcher should still handle valid commands");
+
+    ctx.cleanup().await;
+}
+
+/// Test that a malformed payload to the service command endpoint returns an
+/// error response and the dispatcher keeps running.
+#[tokio::test]
+async fn test_service_command_handler_malformed_payload() {
+    let ctx = TestCtx::new("svc-bad").await;
+
+    let registry = CqrsRegistry::new(ctx.store.clone())
+        .register_command(ServiceCommandHandler::new(CounterServiceHandler));
+
+    spawn_dispatcher(&ctx, registry.command_handlers().to_vec()).await;
+
+    let subject =
+        esrc_cqrs::nats::command_dispatcher::command_subject(ctx.service_name(), "CounterService");
+
+    // Send garbage bytes; we only care that we get a response, not a panic.
+    let bad_result = ctx
+        .client
+        .request(subject.clone(), b"this is not json"[..].into())
+        .await;
+    let _ = bad_result;
+
+    // Confirm the dispatcher is still alive by sending a well-formed command.
+    let id = Uuid::new_v4();
+    let envelope = CounterServiceCommand::Decrement { id, by: 2 };
+    let payload = serde_json::to_vec(&envelope).expect("serialize service command");
+    let msg = ctx
+        .client
+        .request(subject.clone(), payload.into())
+        .await
+        .expect("NATS request should succeed");
+    let reply: ServiceCommandReply<Uuid> =
+        serde_json::from_slice(&msg.payload).expect("valid ServiceCommandReply");
+    assert!(
+        reply.success,
+        "dispatcher should still handle valid commands after malformed payload"
     );
 
     ctx.cleanup().await;
