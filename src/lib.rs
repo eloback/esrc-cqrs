@@ -55,6 +55,8 @@ pub mod nats;
 
 pub use command::CommandHandler;
 pub use error::Error;
+#[cfg(feature = "nats")]
+pub use nats::CqrsClient;
 pub use projector::ProjectorHandler;
 pub use registry::CqrsRegistry;
 pub use query::QueryHandler;

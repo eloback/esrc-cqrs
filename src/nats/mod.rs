@@ -46,6 +46,7 @@ pub mod projector_runner;
 pub mod query_dispatcher;
 
 pub use aggregate_command_handler::{AggregateCommandHandler, CommandEnvelope, CommandReply};
+pub use client::CqrsClient;
 pub use command_dispatcher::NatsCommandDispatcher;
 pub use durable_projector_handler::DurableProjectorHandler;
 pub use live_view_query::LiveViewQuery;
@@ -55,6 +56,8 @@ pub use query_dispatcher::{NatsQueryDispatcher, QueryEnvelope, QueryReply};
 
 /// Aggregate command handler wiring: maps a typed command to an aggregate and writes events.
 mod aggregate_command_handler;
+/// High-level CQRS client for ergonomic command and query dispatch.
+mod client;
 /// Durable projector handler wiring: maps a projector to a durable JetStream consumer.
 mod durable_projector_handler;
 /// Live view query handler: replays events on each request to build a View.
