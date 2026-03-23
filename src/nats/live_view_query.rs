@@ -1,13 +1,12 @@
 use std::marker::PhantomData;
 
-use esrc::Envelope;
 use esrc::error::{self, Error};
 use esrc::event::replay::ReplayOne;
 use esrc::nats::NatsStore;
 use esrc::view::View;
+use esrc::Envelope;
 use futures::StreamExt;
 use serde::Serialize;
-use uuid::Uuid;
 
 use crate::nats::query_dispatcher::{QueryEnvelope, QueryReply};
 use crate::query::QueryHandler;
@@ -54,6 +53,21 @@ where
     }
 }
 
+impl<V> LiveViewQuery<V, V>
+where
+    V: View + Clone + Serialize,
+{
+    /// Create a new handler with the given routing name
+    /// that returns the entire view as the response, without a separate projection step.
+    pub fn new_for_serializable_view(handler_name: &'static str) -> Self {
+        Self {
+            handler_name,
+            projection: |view| view.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<V, R> QueryHandler<NatsStore> for LiveViewQuery<V, R>
 where
     V: View + Send + Sync + 'static,
@@ -69,8 +83,8 @@ where
         store: &'a NatsStore,
         payload: &'a [u8],
     ) -> error::Result<Vec<u8>> {
-        let envelope: QueryEnvelope = serde_json::from_slice(payload)
-            .map_err(|e| esrc::error::Error::Format(e.into()))?;
+        let envelope: QueryEnvelope =
+            serde_json::from_slice(payload).map_err(|e| esrc::error::Error::Format(e.into()))?;
 
         // Replay the full event history for the requested aggregate ID, starting from sequence 0.
         let mut stream = store

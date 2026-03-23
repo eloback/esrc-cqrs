@@ -123,6 +123,25 @@ where
     }
 }
 
+impl<V> MemoryViewQuery<V, V>
+where
+    V: View + Clone + Serialize,
+{
+    /// Create a new handler with the given routing name
+    /// that returns the entire view as the response, without a separate projection step.
+    pub fn new_for_serializable_view(
+        handler_name: &'static str,
+        memory_view: MemoryView<V>,
+    ) -> Self {
+        Self {
+            handler_name,
+            memory_view,
+            projection: |view| view.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<V, R> QueryHandler<NatsStore> for MemoryViewQuery<V, R>
 where
     V: View + Clone + Send + Sync + 'static,
@@ -138,8 +157,8 @@ where
         _store: &'a NatsStore,
         payload: &'a [u8],
     ) -> error::Result<Vec<u8>> {
-        let envelope: QueryEnvelope = serde_json::from_slice(payload)
-            .map_err(|e| esrc::error::Error::Format(e.into()))?;
+        let envelope: QueryEnvelope =
+            serde_json::from_slice(payload).map_err(|e| esrc::error::Error::Format(e.into()))?;
 
         // Take a snapshot under a read lock to avoid holding the lock during serialization.
         let snapshot: V = {

@@ -1,5 +1,4 @@
 use esrc::envelope::Envelope;
-use esrc::error;
 use esrc::project::{Context, Project};
 
 use crate::domain::OrderEvent;

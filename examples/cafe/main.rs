@@ -9,15 +9,14 @@
 mod domain;
 mod error;
 mod projector;
-mod tab;
-mod table;
 
 use std::time::Duration;
 
 use esrc::nats::NatsStore;
 use esrc_cqrs::nats::{
     AggregateCommandHandler, CommandEnvelope, CommandReply, CqrsClient, DurableProjectorHandler,
-    LiveViewQuery, NatsCommandDispatcher, NatsQueryDispatcher, QueryEnvelope, QueryReply,
+    LiveViewQuery, MemoryView, MemoryViewQuery, NatsCommandDispatcher, NatsQueryDispatcher,
+    QueryEnvelope, QueryReply,
 };
 use esrc_cqrs::CqrsRegistry;
 use tokio::time::sleep;
@@ -39,11 +38,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jetstream = async_nats::jetstream::new(client.clone());
     let store = NatsStore::try_new(jetstream, STORE_PREFIX).await?;
 
+    let order_state_memory_view = MemoryView::<OrderState>::new();
+
     let registry = CqrsRegistry::new(store.clone())
         .register_command(AggregateCommandHandler::<Order>::new("Order"))
-        .register_query(LiveViewQuery::<Order, OrderState>::new(
-            "Order.GetState",
-            OrderState::from_order,
+        .register_query(
+            LiveViewQuery::<OrderState, OrderState>::new_for_serializable_view("Order.GetState"),
+        )
+        .register_query(
+            MemoryViewQuery::<OrderState, OrderState>::new_for_serializable_view(
+                "Order.GetState.MemoryView",
+                order_state_memory_view.clone(),
+            ),
+        )
+        .register_projector(DurableProjectorHandler::new(
+            "order_state_memory_view",
+            order_state_memory_view,
         ))
         .register_projector(DurableProjectorHandler::new(
             PROJECTOR_DURABLE,
@@ -89,6 +99,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("[client] Order.GetState dispatch_query: {:?}", order_state);
         assert_eq!(order_state.item.as_deref(), Some("Espresso"));
 
+        // Query the order state using CqrsClient::dispatch_query for a typed result.
+        let order_state: OrderState = cqrs
+            .dispatch_query(QUERY_SERVICE_NAME, "Order.GetState.MemoryView", order_id)
+            .await
+            .expect("Order.GetState.MemoryView query failed");
+        println!(
+            "[client] Order.GetState.MemoryView dispatch_query: {:?}",
+            order_state
+        );
+        assert_eq!(order_state.item.as_deref(), Some("Espresso"));
+
         sleep(Duration::from_millis(200)).await;
 
         // Using manual request/reply to demonstrate access to raw CommandReply and QueryReply
@@ -101,7 +122,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let payload = serde_json::to_vec(&complete_cmd).expect("serialize complete command");
         // Construct the subject manually, can be reused for other commands in the same aggregate.
-        let subject = esrc_cqrs::nats::command_dispatcher::command_subject(COMMAND_SERVICE_NAME, "Order");
+        let subject =
+            esrc_cqrs::nats::command_dispatcher::command_subject(COMMAND_SERVICE_NAME, "Order");
         let reply = driver_client
             .request(subject.clone(), payload.into())
             .await
