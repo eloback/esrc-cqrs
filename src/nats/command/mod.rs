@@ -4,4 +4,4 @@ pub mod aggregate_command_handler;
 pub mod service_command_handler;
 
 pub use aggregate_command_handler::{AggregateCommandHandler, CommandEnvelope, CommandReply};
-pub use service_command_handler::{ServiceCommandHandler, ServiceCommandReply};
+pub use service_command_handler::{EsrcCommandHandler, ServiceCommandHandler, ServiceCommandReply};

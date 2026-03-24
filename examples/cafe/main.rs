@@ -14,9 +14,9 @@ use std::time::Duration;
 
 use esrc::nats::NatsStore;
 use esrc_cqrs::nats::client::CqrsClient;
+use esrc_cqrs::nats::command::ServiceCommandHandler;
 use esrc_cqrs::nats::command::{AggregateCommandHandler, CommandEnvelope, CommandReply};
 use esrc_cqrs::nats::query::{LiveViewQuery, MemoryView, MemoryViewQuery};
-use esrc_cqrs::nats::command::ServiceCommandHandler;
 use esrc_cqrs::nats::{
     DurableProjectorHandler, NatsCommandDispatcher, NatsQueryDispatcher, QueryEnvelope, QueryReply,
 };
@@ -48,7 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = CqrsRegistry::new(store.clone())
         .register_command(AggregateCommandHandler::<Order>::new("Order"))
-        .register_command(ServiceCommandHandler::new(CafeServiceHandler))
+        .register_command(ServiceCommandHandler::new(
+            CafeServiceHandler,
+            SERVICE_HANDLER_NAME,
+        ))
         .register_query(
             LiveViewQuery::<OrderState, OrderState>::new_for_serializable_view("Order.GetState"),
         )
@@ -186,7 +189,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .dispatch_service_command(
                 COMMAND_SERVICE_NAME,
                 SERVICE_HANDLER_NAME,
-                CafeCommands::CompleteOrder { id: service_order_id },
+                CafeCommands::CompleteOrder {
+                    id: service_order_id,
+                },
             )
             .await
             .expect("CafeService CompleteOrder should succeed");

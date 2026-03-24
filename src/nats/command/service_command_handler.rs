@@ -1,10 +1,27 @@
 use serde::de::DeserializeOwned;
+use std::future::Future;
 
 use esrc::error::{self, Error};
 
-use crate::command::NatsServiceCommandHandler;
-
 use serde::{Deserialize, Serialize};
+
+/// A trait for handling service commands in a NATS-based CQRS architecture.
+///
+pub trait EsrcCommandHandler<S, C>: Send + Sync + 'static
+where
+    C: Serialize + DeserializeOwned + Send + Sync,
+{
+    /// Handle a deserialized command, returning a serialized reply payload.
+    ///
+    /// The reply bytes are sent back to the caller verbatim. Use
+    /// [`crate::nats::command::ServiceCommandReply`] as a convenience reply
+    /// envelope, or return any other serializable structure.
+    fn handle<'a>(
+        &'a self,
+        store: &'a mut S,
+        command: C,
+    ) -> impl Future<Output = error::Result<Vec<u8>>> + Send + 'a;
+}
 
 /// A convenience reply envelope for service command handlers.
 ///
@@ -52,10 +69,10 @@ impl<R> ServiceCommandReply<R> {
     }
 }
 
-/// Adapter that wraps a [`NatsServiceCommandHandler`] into a [`crate::command::CommandHandler`].
+/// Adapter that wraps a [`EsrcCommandHandler`] into a [`crate::command::CommandHandler`].
 ///
 /// All variants of `C` are received under a single NATS endpoint named by
-/// [`NatsServiceCommandHandler::name`]. The raw payload is deserialized as `C`
+/// [`ServiceCommandHandler::name`]. The raw payload is deserialized as `C`
 /// and forwarded to the inner handler. The reply bytes are returned verbatim.
 pub struct ServiceCommandHandler<H, C> {
     handler: H,
@@ -69,13 +86,12 @@ where
 {
     /// Create a new adapter wrapping the given handler.
     ///
-    /// The endpoint name is taken from [`NatsServiceCommandHandler::name`] so
+    /// The endpoint name is taken from [`ServiceCommandHandler::name`] so
     /// there is a single registration call.
-    pub fn new<S>(handler: H) -> Self
+    pub fn new<S>(handler: H, name: &'static str) -> Self
     where
-        H: NatsServiceCommandHandler<S, C>,
+        H: EsrcCommandHandler<S, C>,
     {
-        let name = handler.name();
         Self {
             handler,
             name,
@@ -87,7 +103,7 @@ where
 impl<S, H, C> crate::command::CommandHandler<S> for ServiceCommandHandler<H, C>
 where
     S: Send + Sync + 'static,
-    H: NatsServiceCommandHandler<S, C> + Send + Sync + 'static,
+    H: EsrcCommandHandler<S, C> + Send + Sync + 'static,
     C: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     fn name(&self) -> &'static str {

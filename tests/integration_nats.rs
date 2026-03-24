@@ -26,9 +26,9 @@ use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use uuid::Uuid;
 
-use esrc_cqrs::command::NatsServiceCommandHandler;
-use esrc_cqrs::nats::command::ServiceCommandHandler;
 use esrc_cqrs::nats::command::service_command_handler::ServiceCommandReply;
+use esrc_cqrs::nats::command::EsrcCommandHandler;
+use esrc_cqrs::nats::command::ServiceCommandHandler;
 
 // -- Query read model --------------------------------------------------------
 
@@ -844,21 +844,25 @@ async fn test_registry_query_handlers_accessor() {
 /// A typed command enum dispatched through the service handler path.
 #[derive(Debug, Serialize, Deserialize)]
 enum CounterServiceCommand {
-    Increment { id: Uuid, by: i64 },
-    Decrement { id: Uuid, by: i64 },
+    Increment {
+        id: Uuid,
+        by: i64,
+    },
+    Decrement {
+        id: Uuid,
+        by: i64,
+    },
     /// A variant that always fails, used to test domain error propagation.
-    AlwaysFail { id: Uuid },
+    AlwaysFail {
+        id: Uuid,
+    },
 }
 
 /// Service handler that routes `CounterServiceCommand` variants to the aggregate.
 #[derive(Clone)]
 struct CounterServiceHandler;
 
-impl NatsServiceCommandHandler<NatsStore, CounterServiceCommand> for CounterServiceHandler {
-    fn name(&self) -> &'static str {
-        "CounterService"
-    }
-
+impl EsrcCommandHandler<NatsStore, CounterServiceCommand> for CounterServiceHandler {
     async fn handle<'a>(
         &'a self,
         store: &'a mut NatsStore,
@@ -870,29 +874,43 @@ impl NatsServiceCommandHandler<NatsStore, CounterServiceCommand> for CounterServ
         let reply: ServiceCommandReply<Uuid> = match command {
             CounterServiceCommand::Increment { id, by } => {
                 let root = store.read::<Counter>(id).await?;
-                match store.try_write(root, CounterCommand::Increment { by }, None).await {
-                    Ok(written) => ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written)),
+                match store
+                    .try_write(root, CounterCommand::Increment { by }, None)
+                    .await
+                {
+                    Ok(written) => {
+                        ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written))
+                    },
                     Err(e) => ServiceCommandReply::err(esrc_to_cqrs(e)),
                 }
             },
             CounterServiceCommand::Decrement { id, by } => {
                 let root = store.read::<Counter>(id).await?;
-                match store.try_write(root, CounterCommand::Decrement { by }, None).await {
-                    Ok(written) => ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written)),
+                match store
+                    .try_write(root, CounterCommand::Decrement { by }, None)
+                    .await
+                {
+                    Ok(written) => {
+                        ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written))
+                    },
                     Err(e) => ServiceCommandReply::err(esrc_to_cqrs(e)),
                 }
             },
             CounterServiceCommand::AlwaysFail { id } => {
                 let root = store.read::<Counter>(id).await?;
-                match store.try_write(root, CounterCommand::AlwaysFail, None).await {
-                    Ok(written) => ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written)),
+                match store
+                    .try_write(root, CounterCommand::AlwaysFail, None)
+                    .await
+                {
+                    Ok(written) => {
+                        ServiceCommandReply::ok_with(esrc::aggregate::Root::id(&written))
+                    },
                     Err(e) => ServiceCommandReply::err(esrc_to_cqrs(e)),
                 }
             },
         };
 
-        serde_json::to_vec(&reply)
-            .map_err(|e| esrc::error::Error::Format(e.into()))
+        serde_json::to_vec(&reply).map_err(|e| esrc::error::Error::Format(e.into()))
     }
 }
 
@@ -921,8 +939,9 @@ fn esrc_to_cqrs(err: esrc::error::Error) -> esrc_cqrs::Error {
 async fn test_service_command_handler_success() {
     let ctx = TestCtx::new("svc-ok").await;
 
-    let registry = CqrsRegistry::new(ctx.store.clone())
-        .register_command(ServiceCommandHandler::new(CounterServiceHandler));
+    let registry = CqrsRegistry::new(ctx.store.clone()).register_command(
+        ServiceCommandHandler::new(CounterServiceHandler, "CounterService"),
+    );
 
     spawn_dispatcher(&ctx, registry.command_handlers().to_vec()).await;
 
@@ -946,7 +965,10 @@ async fn test_service_command_handler_success() {
 
     // Verify the event was persisted.
     let root: esrc::aggregate::Root<Counter> = ctx.store.read(id).await.unwrap();
-    assert_eq!(root.value, 7, "aggregate value should reflect the service command event");
+    assert_eq!(
+        root.value, 7,
+        "aggregate value should reflect the service command event"
+    );
 
     ctx.cleanup().await;
 }
@@ -957,8 +979,9 @@ async fn test_service_command_handler_success() {
 async fn test_service_command_handler_error() {
     let ctx = TestCtx::new("svc-err").await;
 
-    let registry = CqrsRegistry::new(ctx.store.clone())
-        .register_command(ServiceCommandHandler::new(CounterServiceHandler));
+    let registry = CqrsRegistry::new(ctx.store.clone()).register_command(
+        ServiceCommandHandler::new(CounterServiceHandler, "CounterService"),
+    );
 
     spawn_dispatcher(&ctx, registry.command_handlers().to_vec()).await;
 
@@ -1002,7 +1025,10 @@ async fn test_service_command_handler_error() {
         .expect("NATS request should succeed");
     let good_reply: ServiceCommandReply<Uuid> =
         serde_json::from_slice(&good_msg.payload).expect("valid ServiceCommandReply");
-    assert!(good_reply.success, "dispatcher should still handle valid commands");
+    assert!(
+        good_reply.success,
+        "dispatcher should still handle valid commands"
+    );
 
     ctx.cleanup().await;
 }
@@ -1013,8 +1039,9 @@ async fn test_service_command_handler_error() {
 async fn test_service_command_handler_malformed_payload() {
     let ctx = TestCtx::new("svc-bad").await;
 
-    let registry = CqrsRegistry::new(ctx.store.clone())
-        .register_command(ServiceCommandHandler::new(CounterServiceHandler));
+    let registry = CqrsRegistry::new(ctx.store.clone()).register_command(
+        ServiceCommandHandler::new(CounterServiceHandler, "CounterService"),
+    );
 
     spawn_dispatcher(&ctx, registry.command_handlers().to_vec()).await;
 

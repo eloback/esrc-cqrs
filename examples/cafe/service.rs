@@ -2,9 +2,9 @@ use esrc::error::{self, Error};
 use esrc::event::publish::PublishExt;
 use esrc::event::replay::ReplayOneExt;
 use esrc::nats::NatsStore;
-use esrc_cqrs::command::NatsServiceCommandHandler;
 use esrc_cqrs::error::from_esrc_error;
 use esrc_cqrs::nats::command::service_command_handler::ServiceCommandReply;
+use esrc_cqrs::nats::command::EsrcCommandHandler;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -28,17 +28,13 @@ pub enum CafeCommands {
 
 /// Service command handler for all cafe operations.
 ///
-/// Implements `NatsServiceCommandHandler` so it can be registered via
+/// Implements `EsrcCommandHandler` so it can be registered via
 /// `ServiceCommandHandler::new(CafeServiceHandler)` and receive all
 /// `CafeCommands` variants under a single NATS endpoint.
 #[derive(Clone)]
 pub struct CafeServiceHandler;
 
-impl NatsServiceCommandHandler<NatsStore, CafeCommands> for CafeServiceHandler {
-    fn name(&self) -> &'static str {
-        "CafeService"
-    }
-
+impl EsrcCommandHandler<NatsStore, CafeCommands> for CafeServiceHandler {
     async fn handle<'a>(
         &'a self,
         store: &'a mut NatsStore,
